@@ -20,11 +20,13 @@ using System.IO;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 using Image = SixLabors.ImageSharp.Image;
-using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Formats.Png;
 using System.Drawing;
 using ColorMatrix = System.Drawing.Imaging.ColorMatrix;
 using Rectangle = System.Drawing.Rectangle;
 using System.Drawing.Drawing2D;
+using Microsoft.VisualBasic.Logging;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -36,7 +38,7 @@ namespace Microsoft.Extensions.DependencyInjection
         {
             using (MemoryStream ms = new MemoryStream())
             {
-                imageIn.Save(ms, JpegFormat.Instance);
+                imageIn.Save(ms, PngFormat.Instance);
                 return ms.ToArray();
             }
         }
@@ -73,6 +75,7 @@ namespace Microsoft.Extensions.DependencyInjection
             //TODO make an init to populate these things so we don't have warnings
             private static DiscordSocketClient? _client;
             private static HttpClient _httpClient = new HttpClient();
+            private static Random _random = new Random();
             private static void InitCommands()
             {
                 // Subscribe a handler to see if a message invokes a command.
@@ -204,8 +207,33 @@ namespace Microsoft.Extensions.DependencyInjection
                 Marshal.Copy(argbValues, 0, ptr, numBytes);
                 b.UnlockBits(l);
             }
-            private static Bitmap processImage(Image image, int opacity, string mode)
+            private static (Bitmap,SixLabors.ImageSharp.Point) processImage(Image image, int opacity, string mode, SixLabors.ImageSharp.Point existingPoint )
             {
+
+
+                //preprocess the image so it will fit on the screen. should be a helper
+                if (image.Width > SystemParameters.VirtualScreenWidth || image.Height > SystemParameters.VirtualScreenHeight)
+                {
+                    var newHeight = SystemParameters.VirtualScreenHeight;
+                    var newWidth = SystemParameters.VirtualScreenWidth;
+                    // naively check height first
+                    if (image.Height > SystemParameters.VirtualScreenHeight)
+                    {
+                        // calculate what new width would be
+                        var heightReductionRatio = SystemParameters.VirtualScreenHeight / image.Height;
+                        newWidth = image.Width * heightReductionRatio;
+                    }
+
+                    if (newWidth > SystemParameters.VirtualScreenWidth)
+                    {
+                        // if so, re-calculate height to fit for maxWidth
+                        var widthReductionRatio = SystemParameters.VirtualScreenWidth / newWidth; // ratio of maxWidth:newWidth (height reduction ratio may have been applied)
+                        newHeight = SystemParameters.VirtualScreenHeight * widthReductionRatio; // apply new ratio to maxHeight to get final height
+                        newWidth = SystemParameters.VirtualScreenWidth;
+                    }
+                    image.Mutate(x => x.Resize((int)newWidth, (int)newHeight));
+                }
+
                 if (mode == "maximize")
                 {
                     double widthRatio = (double)image.Width / (double)SystemParameters.VirtualScreenWidth;
@@ -214,11 +242,27 @@ namespace Microsoft.Extensions.DependencyInjection
                     int newWidth = (int)(image.Width / ratio);
                     int newHeight = (int)(image.Height / ratio);
                     image.Mutate(x => x.Resize(newWidth, newHeight));
+                    image.Mutate(x => x.Pad((int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight, SixLabors.ImageSharp.Color.Transparent));
 
-                } else if (mode == "stretch")
+                }
+                else if (mode == "stretch")
                 {
                     image.Mutate(x => x.Resize((int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight));
+                } else
+                {
+                    //todo randomly place this on the screen need to take screen size - image size use that as upper bounds.
+                    // gifs need to get the same frame each time or it will be weird.
+                    var xRange = SystemParameters.VirtualScreenWidth - image.Width;
+                    var yRange = SystemParameters.VirtualScreenHeight - image.Height;
+                    if (existingPoint == new SixLabors.ImageSharp.Point(0, 0))
+                    {
+                        existingPoint = new SixLabors.ImageSharp.Point(_random.Next(0, (int)xRange), _random.Next(0, (int)yRange));
+                    }
+                    var newImage = new Image<Rgba32>((int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight); 
+                    newImage.Mutate(x => x.DrawImage(image, existingPoint, 1));
+                    image = newImage;
                 }
+
 
                 // is there a way that doesn't convert between these about 800 times
                 var im = image.ToArray().ToNetImage();
@@ -227,7 +271,7 @@ namespace Microsoft.Extensions.DependencyInjection
                 {
                     makeBitmapOpaque(b, im, opacity);
                 }
-                return b;
+                return (b, existingPoint);
 
             }
 
@@ -254,15 +298,17 @@ namespace Microsoft.Extensions.DependencyInjection
                 var image = Image.Load(stream);
                 int delay = 1;
                 if (image?.Metadata?.DecodedImageFormat?.Name == "GIF") {
-                    await msg.Channel.SendMessageAsync("gif");
                     delay = image.Frames.RootFrame.Metadata.GetGifMetadata().FrameDelay;
+                    var existingPoint = new SixLabors.ImageSharp.Point(0, 0);
                     for (int i = 0; i < image.Frames.Count; i++)
                     {
-                        processedImages.Add(processImage(image.Frames.CloneFrame(i), opacity, mode));
+                        (Bitmap b, existingPoint) = processImage(image.Frames.CloneFrame(i), opacity, mode, existingPoint);
+                        processedImages.Add(b);
                     }
                 } else
                 {
-                    processedImages.Add(processImage(image, opacity, mode));
+                    (Bitmap b, var _) = processImage(image, opacity, mode, new SixLabors.ImageSharp.Point(0, 0));
+                    processedImages.Add(b);
                 }
 
 
