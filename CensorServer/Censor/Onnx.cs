@@ -25,6 +25,7 @@ using System.Windows;
 using System.Runtime.InteropServices;
 using Path = System.IO.Path;
 using System.Reflection;
+using System.Windows.Forms;
 
 public class CensorService
 {
@@ -78,19 +79,21 @@ public class CensorService
         this._session = new InferenceSession(fullFilePath, hwOpts);
     }
 
-    public (Bitmap, List<RectangleF> detections) ProduceCensoredDesktop(DiscordService.DiscordThread.OpaqueForm window, List<RectangleF> priorDetections)
+    public (Bitmap, List<RectangleF> detections) ProduceCensoredDesktop()
     {
-        System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
-        stopwatch.Start();
-        Bitmap capture = CaptureScreen(window, priorDetections); //TODO do I need to make this a png?
+        Bitmap capture = CaptureScreen();
         (DenseTensor<float> tensor, int padX, int padY, double resizeFactor )= PreprocessImage(capture);
         (Bitmap censoredImage, List<RectangleF> detections) = RunInferenceAndCensor(tensor, padX, padY, resizeFactor);
-        stopwatch.Stop();
-        return (censoredImage,detections);
+        return (censoredImage, detections);
     }
-    private Bitmap CaptureScreen(DiscordService.DiscordThread.OpaqueForm window, List<RectangleF> priorDetections)
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    private Bitmap CaptureScreen()
     {
- 
+
         //Creating a new Bitmap object
         Bitmap captureBitmap = new Bitmap(
            SystemInformation.VirtualScreen.Width,
@@ -98,44 +101,36 @@ public class CensorService
         PixelFormat.Format32bppArgb
         );
 
-        Rectangle captureRectangle = new Rectangle(0, 0, SystemInformation.VirtualScreen.Width, SystemInformation.VirtualScreen.Height);
-        Graphics captureGraphics = Graphics.FromImage(captureBitmap);
-        //https://stackoverflow.com/questions/46590295/how-can-i-capture-the-screen-and-ignore-a-specific-window-in-the-image
-        // It works but it flickers.
-        //https://stackoverflow.com/questions/69145807/take-a-screenshot-behind-window-in-c-sharp-winform
-        // todo set this in the thing
-        //https://stackoverflow.com/questions/6812068/c-sharp-which-is-the-fastest-way-to-take-a-screen-shot
-        //do i need to do this in fragments or something and flicker off ?
-        //https://github.com/fffelix-jan/ScreenBlindfold/blob/main/ScreenBlindfold/BlindfoldForm.cs
-        //https://www.youtube.com/watch?v=yh7Kd3o5Y3k
-        //https://stackoverflow.com/questions/37931433/capture-screen-of-window-by-handle
-        //https://stackoverflow.com/questions/17396000/is-there-any-way-to-hide-chrome-window-and-capture-a-screenshot-or-convert-the-c
-        //https://stackoverflow.com/questions/1163761/capture-screenshot-of-active-window
-        System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
-        stopwatch.Start();
-        // capture the screen with censors.
-        captureGraphics.CopyFromScreen(captureRectangle.Left, captureRectangle.Top, 0, 0, captureRectangle.Size);
-        // still flickering a ton ):
-        for(int i=0; i<priorDetections.Count; i++)
+        Bitmap bitmap = new Bitmap((int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight, PixelFormat.Format32bppArgb);
+        using (Graphics gfx = Graphics.FromImage(bitmap))
+        using (SolidBrush brush = new SolidBrush(Color.FromArgb(0,0,0,0)))
         {
+            gfx.FillRectangle(brush, 0, 0, (int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight);
+            //TODO lets get more windows but chrome is good for now.
+            Process[] procsChrome = Process.GetProcessesByName("chrome");
+            if (procsChrome.Length <= 0)
+            {
+                Console.WriteLine("Chrome is not running");
+                return bitmap;
+            }
+            //TODO this whole thing is super jank
+            //TODO get all windows opening 2 fails
+            foreach (Process proc in procsChrome)
+            {
+                // the chrome process must have a window 
 
-            //Creating a new Bitmap object
-            Bitmap subregionCapture = new Bitmap(
-               (int)priorDetections[i].Width,
-               (int)priorDetections[i].Height,
-            PixelFormat.Format32bppArgb
-            );
+                if (proc.MainWindowHandle == IntPtr.Zero)
 
-            Rectangle subRegionRectangle = new Rectangle((int)priorDetections[i].X, (int)priorDetections[i].Y, (int)priorDetections[i].Width, (int)priorDetections[i].Height);
-            Graphics subregionCaptureGraphics = Graphics.FromImage(subregionCapture);
-            window.Visible = false;
-            subregionCaptureGraphics.CopyFromScreen(subRegionRectangle.Left, subRegionRectangle.Top, 0, 0, subRegionRectangle.Size);
-            window.Visible = true;
-            // now overlay the region onto the new one.
-            captureGraphics.DrawImage(subregionCapture, (int)priorDetections[i].X, (int)priorDetections[i].Y);
+                {
+                    continue;
+                }
+                IntPtr dc = gfx.GetHdc();
+                bool success = PrintWindow(proc.MainWindowHandle, dc, 0);
+                gfx.ReleaseHdc(dc);
+
+            }
         }
-        stopwatch.Stop();
-        return captureBitmap;
+        return bitmap;
     }
 
     private (DenseTensor<float>, int, int, double) PreprocessImage(Bitmap incoming)

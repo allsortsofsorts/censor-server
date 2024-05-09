@@ -30,6 +30,7 @@ using SixLabors.ImageSharp.PixelFormats;
 using Accessibility;
 using System.Net.NetworkInformation;
 using RectangleF = System.Drawing.RectangleF;
+using OpenCvSharp;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -85,7 +86,7 @@ namespace Microsoft.Extensions.DependencyInjection
             private static void InitCommands()
             {
                // Subscribe a handler to see if a message invokes a command.
-               _client.MessageReceived += HandleCommandAsync;
+                _client.MessageReceived += HandleCommandAsync;
                 _client.MessageUpdated += HandleUpdateAsync;
                 _client.Ready += HandleClientReady;
                 return;
@@ -304,7 +305,7 @@ namespace Microsoft.Extensions.DependencyInjection
                     while (true)
                     {
                         // just go as fast as we can its like a frame anyway ._.
-                        (var bitmap, detections) = _service.ProduceCensoredDesktop(window, detections);
+                        (var bitmap, detections) = _service.ProduceCensoredDesktop();
                         window.SelectBitmap(bitmap);
                     }
                 });
