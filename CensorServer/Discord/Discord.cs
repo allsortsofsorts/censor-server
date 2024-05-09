@@ -27,6 +27,9 @@ using Rectangle = System.Drawing.Rectangle;
 using System.Drawing.Drawing2D;
 using Microsoft.VisualBasic.Logging;
 using SixLabors.ImageSharp.PixelFormats;
+using Accessibility;
+using System.Net.NetworkInformation;
+using RectangleF = System.Drawing.RectangleF;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -76,10 +79,13 @@ namespace Microsoft.Extensions.DependencyInjection
             private static DiscordSocketClient? _client;
             private static HttpClient _httpClient = new HttpClient();
             private static Random _random = new Random();
+            private static CensorService _service = new CensorService();
+           
+
             private static void InitCommands()
             {
-                // Subscribe a handler to see if a message invokes a command.
-                _client.MessageReceived += HandleCommandAsync;
+               // Subscribe a handler to see if a message invokes a command.
+               _client.MessageReceived += HandleCommandAsync;
                 _client.MessageUpdated += HandleUpdateAsync;
                 _client.Ready += HandleClientReady;
                 return;
@@ -147,6 +153,15 @@ namespace Microsoft.Extensions.DependencyInjection
                     switch (split[0])
                     {
 
+                        case "!censor-start":
+                            handleCensorStartCommand(msg);
+                            break;
+                        //case "!censor-stop":
+                        //    handleCensorStopCommand(msg);
+                        //    break;
+                        //case "!censor-tune":
+                        //    handleCensorTuneCommand(msg);
+                        //    break;
                         case "!shutdown":
                             handleShutdownCommand(msg);
                             break;
@@ -275,7 +290,30 @@ namespace Microsoft.Extensions.DependencyInjection
 
             }
 
-            private static async void handleImageOverlayCommand(IMessage msg)
+            private static async void handleCensorStartCommand(IMessage msg)
+            {
+                Thread thread = new Thread(() =>
+                {
+                    OpaqueForm window = null;
+                    window = new OpaqueForm(0,0,0,0);
+                    window.ShowInTaskbar = false;
+                    window.Visible = true;
+                    window.TopMost = true;
+                    window.Show();
+                    List<RectangleF> detections = new List<RectangleF>();
+                    while (true)
+                    {
+                        // just go as fast as we can its like a frame anyway ._.
+                        (var bitmap, detections) = _service.ProduceCensoredDesktop(window, detections);
+                        window.SelectBitmap(bitmap);
+                    }
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+            }
+
+
+                private static async void handleImageOverlayCommand(IMessage msg)
             {
                 //https://stackoverflow.com/questions/1061678/change-desktop-wallpaper-using-code-in-net
                 if (msg.Attachments.Count != 1)
@@ -320,6 +358,7 @@ namespace Microsoft.Extensions.DependencyInjection
                         window = new OpaqueForm(processedImages[0]);
                         window.Visible = true;
                         window.TopMost = true;
+                        window.ShowInTaskbar = false;
                         window.Show();
                         Thread.Sleep(active_duration * 1000);
                         window.Visible = false;
@@ -331,6 +370,7 @@ namespace Microsoft.Extensions.DependencyInjection
                             window = new OpaqueForm(processedImages[0]);
                             window.Visible = true;
                             window.TopMost = true;
+                            window.ShowInTaskbar = false;
                             window.Show();
                             for (int i = 0; i < processedImages.Count; i++)
                             {
@@ -538,6 +578,7 @@ namespace Microsoft.Extensions.DependencyInjection
                     {
                         window.Visible = true;
                         window.TopMost = true;
+                        window.ShowInTaskbar = false;
                         window.Show();
                         Thread.Sleep(active_duration * 1000);
                         window.Visible = false;

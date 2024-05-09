@@ -28,7 +28,6 @@ app.UseRouting();
 
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
-//CensorService cs = new CensorService();
 //app.StartCensorLoop();
 app.StartDiscord();
 //app.StartOverlay();
