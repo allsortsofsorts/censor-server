@@ -31,6 +31,8 @@ using Accessibility;
 using System.Net.NetworkInformation;
 using RectangleF = System.Drawing.RectangleF;
 using OpenCvSharp;
+using System.Numerics;
+using OpenCvSharp.Aruco;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -81,12 +83,24 @@ namespace Microsoft.Extensions.DependencyInjection
             private static HttpClient _httpClient = new HttpClient();
             private static Random _random = new Random();
             private static CensorService _service = new CensorService();
-           
+            private static bool _censorEnabled = false;
+            private static Dictionary<string, bool> _censorStyle = new Dictionary<string, bool>() {
+            { "FEMALE_GENITALIA_COVERED", true },
+            { "BUTTOCKS_EXPOSED", true },
+            { "FEMALE_BREAST_EXPOSED", true },
+            { "FEMALE_GENITALIA_EXPOSED", true },
+            { "ANUS_EXPOSED", true },
+            { "ANUS_COVERED", true },
+            { "FEMALE_BREAST_COVERED", true },
+            { "BUTTOCKS_COVERED", true },
+            };
+
+
 
             private static void InitCommands()
             {
                // Subscribe a handler to see if a message invokes a command.
-                _client.MessageReceived += HandleCommandAsync;
+               _client.MessageReceived += HandleCommandAsync;
                 _client.MessageUpdated += HandleUpdateAsync;
                 _client.Ready += HandleClientReady;
                 return;
@@ -157,12 +171,12 @@ namespace Microsoft.Extensions.DependencyInjection
                         case "!censor-start":
                             handleCensorStartCommand(msg);
                             break;
-                        //case "!censor-stop":
-                        //    handleCensorStopCommand(msg);
-                        //    break;
-                        //case "!censor-tune":
-                        //    handleCensorTuneCommand(msg);
-                        //    break;
+                        case "!censor-stop":
+                            handleCensorStopCommand(msg);
+                            break;
+                        case "!censor-tune":
+                            handleCensorTuneCommand(msg);
+                            break;
                         case "!shutdown":
                             handleShutdownCommand(msg);
                             break;
@@ -291,23 +305,71 @@ namespace Microsoft.Extensions.DependencyInjection
 
             }
 
-            private static async void handleCensorStartCommand(IMessage msg)
+            private static async void handleCensorTuneCommand(IMessage msg)
             {
+                parseCensorTuneCommand(msg.Content);
+                await msg.Channel.SendMessageAsync("Censoring styles updated");
+            }
+
+            private static void parseCensorTuneCommand(string content)
+            {
+                //TODO look into a CLI lib to do something like this, otherwise lift it ourselves, for now doing this as a one off...
+                var startOfLine = 0; // magic number is chars in "censor-tune "
+                var endOfLine = content.Length;
+                if (startOfLine < 0 || endOfLine < 0)
+                {
+                    //TODO return an errors
+                    return;
+                }
+
+                string line = content.Substring(startOfLine + 1, endOfLine - 1 - startOfLine);
+                string[] splitOnSpaces = content.Split(' ');
+                foreach (string piece in splitOnSpaces)
+                {
+                    if (piece.Contains("="))
+                    {
+                        string[] splitOnEqual = piece.Split('=');
+                        if (splitOnEqual.Length == 2)
+                        {
+                            _censorStyle[splitOnEqual[0]] = bool.Parse(splitOnEqual[1]);
+                        }
+                    }
+                }
+            }
+
+            private static async void handleCensorStopCommand(IMessage msg)
+            {
+                _censorEnabled = false;
+                await msg.Channel.SendMessageAsync("Censoring stopped if it was running");
+            }
+
+                private static async void handleCensorStartCommand(IMessage msg)
+            {
+
+                if (_censorEnabled)
+                {
+                    await msg.Channel.SendMessageAsync("Cannot start two censors at a time");
+                    return;
+                }
+                await msg.Channel.SendMessageAsync("Censoring starting");
+                _censorEnabled = true;
                 Thread thread = new Thread(() =>
                 {
                     OpaqueForm window = null;
                     window = new OpaqueForm(0,0,0,0);
+                    window.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
                     window.ShowInTaskbar = false;
                     window.Visible = true;
                     window.TopMost = true;
                     window.Show();
                     List<RectangleF> detections = new List<RectangleF>();
-                    while (true)
+                    while (_censorEnabled)
                     {
                         // just go as fast as we can its like a frame anyway ._.
-                        (var bitmap, detections) = _service.ProduceCensoredDesktop();
-                        window.SelectBitmap(bitmap);
+                        window.SelectBitmap(_service.ProduceCensoredDesktop(_censorStyle));
                     }
+                    window.Visible = false;
+                    window.Dispose();
                 });
                 thread.SetApartmentState(ApartmentState.STA);
                 thread.Start();

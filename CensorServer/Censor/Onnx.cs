@@ -26,6 +26,8 @@ using System.Runtime.InteropServices;
 using Path = System.IO.Path;
 using System.Reflection;
 using System.Windows.Forms;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Newtonsoft.Json.Linq;
 
 public class CensorService
 {
@@ -79,12 +81,12 @@ public class CensorService
         this._session = new InferenceSession(fullFilePath, hwOpts);
     }
 
-    public (Bitmap, List<RectangleF> detections) ProduceCensoredDesktop()
+    public Bitmap ProduceCensoredDesktop(Dictionary<string, bool> censorStyle)
     {
         Bitmap capture = CaptureScreen();
         (DenseTensor<float> tensor, int padX, int padY, double resizeFactor )= PreprocessImage(capture);
-        (Bitmap censoredImage, List<RectangleF> detections) = RunInferenceAndCensor(tensor, padX, padY, resizeFactor);
-        return (censoredImage, detections);
+        Bitmap censoredImage = RunInferenceAndCensor(censorStyle, tensor, padX, padY, resizeFactor);
+        return censoredImage;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -125,7 +127,7 @@ public class CensorService
                     continue;
                 }
                 IntPtr dc = gfx.GetHdc();
-                bool success = PrintWindow(proc.MainWindowHandle, dc, 0);
+                bool success = PrintWindow(proc.MainWindowHandle, dc, 0x3); //TODO figure out what this magic number flag actually is
                 gfx.ReleaseHdc(dc);
 
             }
@@ -172,7 +174,13 @@ public class CensorService
         return (new DenseTensor<float>(pnd.ToArray<float>(), dimensions, false), padX, padY, resizeFactor);
     }
 
-    private (Bitmap, List<RectangleF>) RunInferenceAndCensor(DenseTensor<float> tensor, int padX, int padY, double resizeFactor)
+    public class Detection
+    {
+        public required RectangleF Rectangle { get; set; }
+        public required string ClassName { get; set; }
+    }
+
+    private Bitmap RunInferenceAndCensor(Dictionary<string, bool> censorStyles, DenseTensor<float> tensor, int padX, int padY, double resizeFactor)
     {
         var inputs = new List<NamedOnnxValue>
             {
@@ -189,7 +197,7 @@ public class CensorService
         var rows = outputs.shape[0];
         var nmsboxes = new List<Rect> { };
         var boxes = new List<RectangleF> { };
-        var detections = new List<RectangleF> { };
+        var detections = new List<Detection> { };
         var scores = new List<float> { };
         var class_ids = new List<int> { };
         for (int i = 0; i < rows; i++)
@@ -218,11 +226,7 @@ public class CensorService
         CvDnn.NMSBoxes(nmsboxes, scores, 0.25f, 0.45f, out indices);
         for (int i = 0; i < indices.Length; i++)
         {
-            // these are all needed so we can make this configurable which we will do in a follow up diff
-            var box = boxes[indices[i]];
-            var score = scores[indices[i]];
-            var class_id = class_ids[indices[i]];
-            detections.Add(boxes[indices[i]]);
+            detections.Add(new Detection() { ClassName = ClassList[class_ids[indices[i]]], Rectangle = boxes[indices[i]] });
         }
 
         Bitmap bitmap = new Bitmap((int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight, PixelFormat.Format32bppArgb);
@@ -232,10 +236,20 @@ public class CensorService
         {
             gfx.FillRectangle(brush, 0, 0, (int)SystemParameters.VirtualScreenWidth, (int)SystemParameters.VirtualScreenHeight);
             if (detections.Count > 0) {
-                gfx.FillRectangles(shadowBrush, detections.ToArray());
+                var filteredDetections = new List<RectangleF> { };
+                foreach (var detection in detections)
+                {
+                    if (censorStyles.ContainsKey(detection.ClassName) && censorStyles[detection.ClassName]) {
+                        filteredDetections.Add(detection.Rectangle);
+                    } 
+                }
+                if (filteredDetections.Count > 0)
+                {
+                    gfx.FillRectangles(shadowBrush, filteredDetections.ToArray());
+                }
             }
         }
-        return (bitmap, detections);
+        return bitmap;
     }
    
     static unsafe NDArray ToNDArray(Mat src)
